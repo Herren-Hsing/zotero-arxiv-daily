@@ -131,7 +131,7 @@ if __name__ == '__main__':
     if args.debug:
         logger.debug("Debug mode is on.")
     today = datetime.datetime.now(tz=datetime.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    yesterday = today - datetime.timedelta(days=1)
+    yesterday = today - datetime.timedelta(days=5)
     logger.info("Retrieving Zotero corpus...")
     corpus = get_zotero_corpus(args.zotero_id, args.zotero_key)
     logger.info(f"Retrieved {len(corpus)} papers from Zotero.")
