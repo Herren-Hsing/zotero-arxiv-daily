@@ -9,7 +9,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from .reranker import get_reranker_cls
 from .construct_email import render_email
-from .conference_digest import DAILY_LIMIT, daily_conference_candidates, fetch_conference_papers
+from .conference_digest import (
+    DAILY_LIMIT,
+    daily_conference_candidates,
+    fetch_conference_papers,
+    load_conference_abstracts,
+)
 from .utils import send_email
 from openai import OpenAI
 from tqdm import tqdm
@@ -135,6 +140,11 @@ class Executor:
             for p in tqdm(reranked_papers):
                 p.generate_tldr(self.openai_client, self.config.llm)
                 p.generate_affiliations(self.openai_client, self.config.llm)
+        if conference_papers:
+            logger.info("Loading and translating abstracts for the selected conference papers...")
+            load_conference_abstracts(conference_papers)
+            for paper in tqdm(conference_papers):
+                paper.translate_abstract(self.openai_client, self.config.llm)
         logger.info("Sending email...")
         email_content = render_email(reranked_papers, conference_papers)
         send_email(self.config, email_content)

@@ -262,6 +262,14 @@ def test_daily_conference_section_is_independent_of_preprints(config, monkeypatc
     ]
     monkeypatch.setattr(executor_module, "fetch_conference_papers", lambda: conferences)
     monkeypatch.setattr(executor_module, "daily_conference_candidates", lambda papers, *_: papers)
+    loaded = []
+
+    def load_abstracts(papers):
+        loaded.extend(papers)
+        for paper in papers:
+            paper.abstract = "A published abstract."
+
+    monkeypatch.setattr(executor_module, "load_conference_abstracts", load_abstracts)
     sent = []
     monkeypatch.setattr(executor_module, "send_email", lambda _, body: sent.append(body))
 
@@ -278,6 +286,8 @@ def test_daily_conference_section_is_independent_of_preprints(config, monkeypatc
     email, = sent
     assert "2026 Conference Papers" in email
     assert email.count("<li>") == 20
+    assert email.count("<strong>中文摘要</strong>") == 20
+    assert loaded == list(reversed(conferences[5:]))
     assert "Conference Paper 24" in email
     assert "Conference Paper 04" not in email
     assert ("Today's preprint" in email) == has_preprints

@@ -1,5 +1,7 @@
 """Tests for zotero_arxiv_daily.protocol: Paper.generate_tldr, Paper.generate_affiliations."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from tests.canned_responses import make_sample_paper, make_stub_openai_client
@@ -99,6 +101,55 @@ def test_invalid_api_mode_falls_back_to_abstract(llm_params):
     paper = make_sample_paper()
 
     assert paper.generate_tldr(make_stub_openai_client(), llm_params) == paper.abstract
+
+
+@pytest.mark.parametrize("api_mode", ["chat_completion", "response"])
+def test_translate_abstract_uses_configured_model_and_source_text(llm_params, api_mode):
+    llm_params["api_mode"] = api_mode
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            output_text="中文译文。",
+            choices=[SimpleNamespace(message=SimpleNamespace(content="中文译文。"))],
+        )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+        responses=SimpleNamespace(create=create),
+    )
+    paper = make_sample_paper(abstract="We report a 15% improvement.")
+
+    paper.translate_abstract(client, llm_params)
+
+    call, = calls
+    messages = call["input" if api_mode == "response" else "messages"]
+    assert "Simplified Chinese" in messages[0]["content"]
+    assert messages[1] == {"role": "user", "content": "We report a 15% improvement."}
+    assert call["model"] == llm_params["generation_kwargs"]["model"]
+    assert paper.translated_abstract == "中文译文。"
+    assert paper.abstract == "We report a 15% improvement."
+
+
+def test_translate_abstract_skips_empty_input_and_leaves_original_on_error(llm_params):
+    calls = []
+
+    def fail(**kwargs):
+        calls.append(kwargs)
+        raise RuntimeError("translation unavailable")
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fail)))
+    missing = make_sample_paper(abstract=" ")
+    available = make_sample_paper(abstract="The original abstract")
+
+    missing.translate_abstract(client, llm_params)
+    available.translate_abstract(client, llm_params)
+
+    assert len(calls) == 1
+    assert missing.translated_abstract is None
+    assert available.translated_abstract is None
+    assert available.abstract == "The original abstract"
 
 
 # ---------------------------------------------------------------------------

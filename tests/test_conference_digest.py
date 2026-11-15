@@ -141,3 +141,36 @@ def test_new_venue_catalogues_produce_official_links(monkeypatch, fetcher, sourc
 
     assert (paper.source, paper.title, paper.authors[0]) == (source, "One Paper", "A. Author")
     assert unquote(paper.url).endswith(link_suffix)
+
+
+def test_load_conference_abstracts_uses_official_metadata_and_verified_preprints(monkeypatch):
+    existing = make_sample_paper(source="ACL", abstract="Published ACL abstract")
+    ndss = make_sample_paper(source="NDSS", url="https://www.ndss-symposium.org/ndss-paper/demo/", abstract="")
+    www = make_sample_paper(source="WWW", title="Web Paper", abstract="")
+    matched = make_sample_paper(source="IEEE S&P", title="Security Paper", authors=["A. Author"], abstract="")
+    mismatch = make_sample_paper(source="CCS", title="Same Title", authors=["B. Researcher"], abstract="")
+    calls = []
+
+    def get(url):
+        calls.append(url)
+        if url == ndss.url:
+            return b'<div class="paper-data"><p><strong>Paper authors</strong></p><p>A published abstract.</p></div>'
+        if url == conference_digest.WWW_PROCEEDINGS:
+            return b'''<main>
+              <h3><a class="DLtitleLink" href="https://dl.acm.org/doi/10.1145/3774904.123">Web Paper</a></h3>
+              <ul><li>A. Author</li></ul><div class="DLabstract">A WWW abstract.</div></main>'''
+        assert url.startswith("https://export.arxiv.org/api/query?")
+        return b'''<feed xmlns="http://www.w3.org/2005/Atom">
+          <entry><title>Security Paper.</title><author><name>Ally Author</name></author>
+            <summary>A verified preprint abstract.</summary></entry>
+          <entry><title>Same Title</title><author><name>C. Other</name></author>
+            <summary>An unrelated abstract.</summary></entry></feed>'''
+
+    monkeypatch.setattr(conference_digest, "_get", get)
+    conference_digest.load_conference_abstracts([existing, ndss, www, matched, mismatch])
+
+    assert [paper.abstract for paper in (existing, ndss, www, matched, mismatch)] == [
+        "Published ACL abstract", "A published abstract.", "A WWW abstract.",
+        "A verified preprint abstract.", "",
+    ]
+    assert len(calls) == 3
