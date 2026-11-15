@@ -4,12 +4,14 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 import gzip
 from hashlib import sha256
+from http.client import HTTPException
 import json
 import re
 from unicodedata import normalize
 from urllib.parse import quote, urlencode, urljoin
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
+from zlib import error as CompressionError
 
 from loguru import logger
 from lxml import etree, html
@@ -29,6 +31,7 @@ CCS_ACCEPTED = "https://www.sigsac.org/ccs/CCS2026/program/accepted-papers.html"
 NDSS_ACCEPTED = "https://www.ndss-symposium.org/ndss2026/accepted-papers/"
 WWW_RESEARCH = "https://www2026.thewebconf.org/accepted/research-tracks.html"
 AAAI_FULL_PAPER_ISSUES = {str(issue) for issue in range(1, 46)}
+INCOMPLETE_RESPONSE = (HTTPException, EOFError, CompressionError)
 
 
 def _get(url: str) -> bytes:
@@ -39,11 +42,17 @@ def _get(url: str) -> bytes:
             "Accept-Encoding": "gzip",
         },
     )
-    with urlopen(request, timeout=20) as response:
-        body = response.read()
-        if response.headers.get("Content-Encoding") == "gzip":
-            return gzip.decompress(body)
-        return body
+    for attempt in range(2):
+        try:
+            with urlopen(request, timeout=20) as response:
+                body = response.read()
+                if response.headers.get("Content-Encoding") == "gzip":
+                    return gzip.decompress(body)
+                return body
+        except INCOMPLETE_RESPONSE as error:
+            if attempt:
+                raise
+            logger.warning(f"Incomplete catalogue response from {url}; retrying once: {error}")
 
 
 def _title_key(title: str) -> str:
@@ -280,7 +289,7 @@ def fetch_conference_papers() -> list[Paper]:
         for venue, future in pending.items():
             try:
                 catalogue = future.result()
-            except (OSError, ValueError, KeyError, ElementTree.ParseError, etree.LxmlError) as error:
+            except (OSError, ValueError, KeyError, ElementTree.ParseError, etree.LxmlError, *INCOMPLETE_RESPONSE) as error:
                 logger.warning(f"Unable to load {venue} 2026 conference papers: {error}")
                 continue
             logger.info(f"Loaded {len(catalogue)} {venue} 2026 conference papers")

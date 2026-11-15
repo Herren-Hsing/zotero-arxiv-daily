@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from http.client import IncompleteRead
 import json
 from urllib.parse import unquote
 
@@ -63,9 +64,10 @@ def test_virtual_catalogue_requires_visible_accepted_main_track_papers(monkeypat
     assert paper.url == "https://neurips.cc/virtual/2026/poster/123"
 
 
-def test_one_unavailable_venue_does_not_stop_the_others(monkeypatch):
+@pytest.mark.parametrize("failure", [TimeoutError("catalogue timed out"), IncompleteRead(b"partial")])
+def test_one_unavailable_venue_does_not_stop_the_others(monkeypatch, failure):
     def unavailable():
-        raise TimeoutError("catalogue timed out")
+        raise failure
 
     acl = make_sample_paper(source="ACL")
     monkeypatch.setattr(conference_digest, "_anthology_papers", lambda venue, _: [acl] if venue == "ACL" else [])
@@ -75,6 +77,22 @@ def test_one_unavailable_venue_does_not_stop_the_others(monkeypatch):
         monkeypatch.setattr(conference_digest, f"_{source}_papers", lambda: [])
 
     assert conference_digest.fetch_conference_papers() == [acl]
+
+
+def test_incomplete_http_response_is_retried(monkeypatch):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    def incomplete_read():
+        raise IncompleteRead(b"partial")
+
+    responses = iter([
+        SimpleNamespace(read=incomplete_read),
+        SimpleNamespace(read=lambda: b"full catalogue", headers={}),
+    ])
+    monkeypatch.setattr(conference_digest, "urlopen", lambda *_args, **_kwargs: nullcontext(next(responses)))
+
+    assert conference_digest._get("https://example.org/catalogue") == b"full catalogue"
 
 
 def test_emnlp_uses_only_main_proceedings(monkeypatch):
