@@ -157,6 +157,7 @@ reranker:
     batch_size: null # The batch size for embedding API requests. Adjust to match your provider's limit. Example: 64
 
 executor:
+  ccf_a_2026: true # Add up to 20 relevant 2026 AI, security, NLP, and web conference papers.
   debug: false # Whether to use debug mode. Example: true
   send_empty: false # Whether to send an empty email even if no new papers today. Example: true
   max_paper_num: 100 # The maximum number of the papers presented in the email. Example: 100
@@ -173,6 +174,14 @@ That's all! Now you can test the workflow by manually triggering it:
 Then check the log and the receiver email after it finishes.
 
 The main workflow runs daily at 01:00 UTC (09:00 in China). You can change this time in `.github/workflows/main.yml`.
+
+### 2026 conference papers
+
+The daily email includes up to 20 additional papers from 2026 conference catalogues. The original CCF A AI selection covers AAAI, ACL Long Papers, CVPR, ICML, ICLR, and NeurIPS. ICCV takes place in odd-numbered years. The selection also covers USENIX Security, IEEE Symposium on Security and Privacy, ACM CCS, NDSS, EMNLP main proceedings, and WWW research tracks.
+
+Candidate titles rotate by calendar day in China on a 64-day cycle. The ranking pool reserves space for smaller venues, then Zotero relevance determines the final selection. The ranking uses abstracts where available and titles for the other records. Papers already in the selected Zotero collections or in that day's preprint candidates are excluded by title. The section is sent on days with no new preprints when conference candidates are available. Each entry links to the official paper page or to its title in the conference's accepted-paper list.
+
+Existing `CUSTOM_CONFIG` values inherit this feature. To turn it off, set `executor.ccf_a_2026: false`.
 
 ### Local Running
 Supported by [uv](https://github.com/astral-sh/uv), this workflow can easily run on your local device if uv is installed:
