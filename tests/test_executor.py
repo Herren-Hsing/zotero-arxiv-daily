@@ -276,7 +276,7 @@ def test_daily_conference_section_is_independent_of_preprints(config, monkeypatc
     executor.run()
 
     email, = sent
-    assert "2026 CCF A AI Conferences" in email
+    assert "2026 Conference Papers" in email
     assert email.count("<li>") == 20
     assert "Conference Paper 24" in email
     assert "Conference Paper 04" not in email

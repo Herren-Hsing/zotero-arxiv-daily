@@ -143,6 +143,6 @@ def render_email(papers: list[Paper], conference_papers: Sequence[Paper] = ()) -
             credit = f" · {escape(authors)}" if authors else ""
             score = f" · Relevance {paper.score:.1f}" if paper.score is not None else ""
             items.append(f'<li><a href="{url}">{title}</a> · {venue}{credit}{score}</li>')
-        content += '<h2>2026 CCF A AI Conferences</h2><ol>' + ''.join(items) + '</ol>'
+        content += '<h2>2026 Conference Papers</h2><ol>' + ''.join(items) + '</ol>'
 
     return framework.replace('__CONTENT__', content)

@@ -1,12 +1,13 @@
-"""Build a daily slate from the 2026 CCF A AI conference catalogues."""
+"""Build a daily slate from published and accepted 2026 conference papers."""
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 import gzip
 from hashlib import sha256
 import json
+import re
 from unicodedata import normalize
-from urllib.parse import urlencode, urljoin
+from urllib.parse import quote, urlencode, urljoin
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
@@ -19,9 +20,14 @@ from .protocol import Paper
 DAILY_LIMIT = 20
 CANDIDATE_LIMIT = 256
 ROTATION_DAYS = 64
-ACL_XML = "https://raw.githubusercontent.com/acl-org/acl-anthology/master/data/xml/2026.acl.xml"
+ANTHOLOGY_XML = "https://raw.githubusercontent.com/acl-org/acl-anthology/master/data/xml"
 CVPR_PROCEEDINGS = "https://openaccess.thecvf.com/CVPR2026?day=all"
 ICML_PROCEEDINGS = "https://proceedings.mlr.press/v306/"
+USENIX_PROGRAM = "https://www.usenix.org/conference/usenixsecurity26/technical-sessions"
+SP_ACCEPTED = "https://sp2026.ieee-security.org/accepted-papers.html"
+CCS_ACCEPTED = "https://www.sigsac.org/ccs/CCS2026/program/accepted-papers.html"
+NDSS_ACCEPTED = "https://www.ndss-symposium.org/ndss2026/accepted-papers/"
+WWW_RESEARCH = "https://www2026.thewebconf.org/accepted/research-tracks.html"
 AAAI_FULL_PAPER_ISSUES = {str(issue) for issue in range(1, 46)}
 
 
@@ -49,13 +55,13 @@ def _xml_text(element: ElementTree.Element | None) -> str:
     return "".join(element.itertext()).strip() if element is not None else ""
 
 
-def _acl_papers() -> list[Paper]:
-    catalogue = ElementTree.fromstring(_get(ACL_XML))
+def _anthology_papers(venue: str, volume: str) -> list[Paper]:
+    catalogue = ElementTree.fromstring(_get(f"{ANTHOLOGY_XML}/2026.{venue.lower()}.xml"))
     papers = []
-    for entry in catalogue.findall("./volume[@id='long']/paper"):
-        identifier = f"2026.acl-long.{entry.attrib['id']}"
+    for entry in catalogue.findall(f"./volume[@id='{volume}']/paper"):
+        identifier = f"2026.{venue.lower()}-{volume}.{entry.attrib['id']}"
         papers.append(Paper(
-            source="ACL",
+            source=venue,
             title=_xml_text(entry.find("title")),
             authors=[
                 " ".join(filter(None, [_xml_text(author.find("first")), _xml_text(author.find("last"))]))
@@ -63,6 +69,96 @@ def _acl_papers() -> list[Paper]:
             ],
             abstract=_xml_text(entry.find("abstract")),
             url=f"https://aclanthology.org/{identifier}/",
+        ))
+    return papers
+
+
+def _usenix_papers() -> list[Paper]:
+    catalogue = html.fromstring(_get(USENIX_PROGRAM))
+    papers = []
+    for entry in catalogue.xpath("//article[contains(concat(' ', @class, ' '), ' node-paper ')]"):
+        links = entry.xpath("./h2/a[starts-with(@href, '/conference/usenixsecurity26/presentation/')]")
+        if not links:
+            continue
+        link = links[0]
+        authors = entry.xpath(".//div[contains(@class, 'field-name-field-paper-people-text')]//p/text()")
+        abstract = entry.xpath("string(.//div[contains(@class, 'field-name-field-paper-description-long')])")
+        papers.append(Paper(
+            source="USENIX Security",
+            title=" ".join(link.text_content().split()),
+            authors=[name.strip(" ,;\r\n\t") for name in authors if name.strip(" ,;\r\n\t")],
+            abstract=" ".join(abstract.split()),
+            url=urljoin(USENIX_PROGRAM, link.attrib["href"]),
+        ))
+    return papers
+
+
+def _text_link(url: str, title: str) -> str:
+    # Some venues expose only a conference-wide list. Link to the paper's title within that list.
+    return f"{url}#:~:text={quote(title, safe='').replace('-', '%2D')}"
+
+
+def _sp_papers() -> list[Paper]:
+    catalogue = html.fromstring(_get(SP_ACCEPTED))
+    papers = []
+    for entry in catalogue.xpath("//div[starts-with(@id, 'cycle')]/div[@class='list-group-item'][b/a]"):
+        title = " ".join(entry.xpath("string(./b/a)").split())
+        author_text = "".join(entry.xpath("./div[contains(@class, 'authorlist')]/br[1]/preceding-sibling::text()"))
+        papers.append(Paper(
+            source="IEEE S&P",
+            title=title,
+            authors=[name.strip() for name in author_text.split(",") if name.strip()],
+            abstract="",
+            url=_text_link(SP_ACCEPTED, title),
+        ))
+    return papers
+
+
+def _ccs_papers() -> list[Paper]:
+    catalogue = html.fromstring(_get(CCS_ACCEPTED))
+    papers = []
+    for entry in catalogue.xpath("//table//tr[count(td)=2]"):
+        title = " ".join(entry.xpath("string(./td[1])").split())
+        author_lines = entry.xpath("./td[2]/text()")
+        papers.append(Paper(
+            source="CCS",
+            title=title,
+            authors=[name.split(" (", 1)[0].strip() for name in author_lines if name.strip()],
+            abstract="",
+            url=_text_link(CCS_ACCEPTED, title),
+        ))
+    return papers
+
+
+def _ndss_papers() -> list[Paper]:
+    catalogue = html.fromstring(_get(NDSS_ACCEPTED))
+    papers = []
+    for link in catalogue.xpath("//h2[@class='pt-cv-title']/a[starts-with(@href, 'https://www.ndss-symposium.org/ndss-paper/')]"):
+        author_text = link.xpath("string(../../div//div[contains(@class, 'pt-cv-ctf-display_authors')])")
+        author_lines = re.split(r"\)\s*,\s*", author_text)
+        papers.append(Paper(
+            source="NDSS",
+            title=" ".join(link.text_content().split()),
+            authors=[name.split(" (", 1)[0].strip() for name in author_lines if name.strip()],
+            abstract="",
+            url=link.attrib["href"],
+        ))
+    return papers
+
+
+def _www_papers() -> list[Paper]:
+    catalogue = html.fromstring(_get(WWW_RESEARCH))
+    papers = []
+    for entry in catalogue.xpath("//div[@class='papers-section']//li[span[@class='paper-id']]"):
+        title = " ".join(entry.xpath("string(span[@class='paper-id']/following-sibling::text()[1])").split())
+        title = title.rstrip(" —")
+        author_text = entry.xpath("string(span[@class='paper-authors'])")
+        papers.append(Paper(
+            source="WWW",
+            title=title,
+            authors=[name.strip() for name in re.split(r",| and ", " ".join(author_text.split())) if name.strip()],
+            abstract="",
+            url=_text_link(WWW_RESEARCH, title),
         ))
     return papers
 
@@ -165,12 +261,18 @@ def _aaai_papers() -> list[Paper]:
 def fetch_conference_papers() -> list[Paper]:
     """Fetch public conference metadata, retaining the sources that respond."""
     sources = {
-        "ACL": _acl_papers,
+        "ACL": lambda: _anthology_papers("ACL", "long"),
         "CVPR": _cvpr_papers,
         "ICML": _icml_papers,
         "ICLR": lambda: _virtual_papers("ICLR"),
         "NeurIPS": lambda: _virtual_papers("NeurIPS"),
         "AAAI": _aaai_papers,
+        "EMNLP": lambda: _anthology_papers("EMNLP", "main"),
+        "USENIX Security": _usenix_papers,
+        "IEEE S&P": _sp_papers,
+        "CCS": _ccs_papers,
+        "NDSS": _ndss_papers,
+        "WWW": _www_papers,
     }
     papers = []
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -202,4 +304,16 @@ def daily_conference_candidates(
             previous = candidates.get(fingerprint)
             if previous is None or (not previous.abstract and paper.abstract):
                 candidates[fingerprint] = paper
-    return [candidates[key] for key in sorted(candidates)[:CANDIDATE_LIMIT]]
+    fingerprints = sorted(candidates)
+    if len(fingerprints) <= CANDIDATE_LIMIT:
+        return [candidates[key] for key in fingerprints]
+
+    # Keep smaller venues represented in the ranking pool before filling the remaining slots.
+    by_venue: dict[str, list[int]] = {}
+    for key in fingerprints:
+        by_venue.setdefault(candidates[key].source, []).append(key)
+    reserved_per_venue = CANDIDATE_LIMIT // (2 * len(by_venue))
+    selected = {key for venue_keys in by_venue.values() for key in venue_keys[:reserved_per_venue]}
+    remaining = [key for key in fingerprints if key not in selected]
+    selected.update(remaining[:CANDIDATE_LIMIT - len(selected)])
+    return [candidates[key] for key in sorted(selected)]
