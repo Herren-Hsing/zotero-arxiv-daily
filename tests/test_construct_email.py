@@ -31,6 +31,19 @@ def test_render_conference_metadata_escapes_html():
     assert "ICML · A &amp; B, C, D et al. · Relevance 7.5" in html
 
 
+def test_render_conference_translations_show_fallbacks_and_escape_text():
+    translated = make_sample_paper(title="Translated", translated_abstract="数字 A < B", abstract="An English original")
+    untranslated = make_sample_paper(title="Original", translated_abstract=None, abstract="A & B")
+    missing = make_sample_paper(title="Missing abstract", abstract="")
+
+    html = render_email([], [translated, untranslated, missing])
+
+    assert "<strong>中文摘要</strong>　数字 A &lt; B" in html
+    assert "An English original" not in html
+    assert "<strong>原文摘要</strong>　A &amp; B" in html
+    assert "暂无可核验的摘要" in html
+
+
 def test_render_email_author_truncation():
     authors = [f"Author {i}" for i in range(10)]
     paper = make_sample_paper(authors=authors, score=7.0, tldr="ok")

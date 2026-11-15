@@ -30,8 +30,19 @@ SP_ACCEPTED = "https://sp2026.ieee-security.org/accepted-papers.html"
 CCS_ACCEPTED = "https://www.sigsac.org/ccs/CCS2026/program/accepted-papers.html"
 NDSS_ACCEPTED = "https://www.ndss-symposium.org/ndss2026/accepted-papers/"
 WWW_RESEARCH = "https://www2026.thewebconf.org/accepted/research-tracks.html"
+WWW_PROCEEDINGS = "https://www.sigweb.hosting.acm.org/toc/www26a.html"
 AAAI_FULL_PAPER_ISSUES = {str(issue) for issue in range(1, 46)}
 INCOMPLETE_RESPONSE = (HTTPException, EOFError, CompressionError)
+SOURCE_ERRORS = (OSError, ValueError, KeyError, ElementTree.ParseError, etree.LxmlError, *INCOMPLETE_RESPONSE)
+
+DETAIL_ABSTRACT_XPATH = {
+    "CVPR": "//*[@id='abstract']",
+    "ICML": "//*[@id='abstract']",
+    "ICLR": "//*[@id='abstractText']",
+    "NeurIPS": "//*[@id='abstractText']",
+    "NDSS": "//div[@class='paper-data']/p[not(strong) and normalize-space()]",
+}
+ATOM = {"atom": "http://www.w3.org/2005/Atom"}
 
 
 def _get(url: str) -> bytes:
@@ -228,6 +239,81 @@ def _virtual_papers(venue: str) -> list[Paper]:
     return papers
 
 
+def _fetch_detail_abstract(paper: Paper) -> str:
+    try:
+        page = html.fromstring(_get(paper.url))
+        sections = page.xpath(DETAIL_ABSTRACT_XPATH[paper.source])
+        return " ".join(" ".join(section.text_content() for section in sections).split())
+    except SOURCE_ERRORS as error:
+        logger.warning(f"Unable to load the conference abstract from {paper.url}: {error}")
+        return ""
+
+
+def _fetch_www_abstracts() -> dict[str, str]:
+    page = html.fromstring(_get(WWW_PROCEEDINGS))
+    return {
+        _title_key(link.text_content()): " ".join(
+            link.xpath("string(../following-sibling::*[2][@class='DLabstract'])").split()
+        )
+        for link in page.xpath("//a[@class='DLtitleLink'][starts-with(@href, 'https://dl.acm.org/doi/10.1145/3774904.')]")
+    }
+
+
+def _author_surnames(names: list[str]) -> set[str]:
+    return {_title_key(name.split()[-1]) for name in names if name.strip()}
+
+
+def _fill_from_arxiv(papers: list[Paper]) -> None:
+    phrases = [" ".join(re.findall(r"\w+", paper.title)) for paper in papers]
+    query = urlencode({
+        "search_query": " OR ".join(f'ti:"{title}"' for title in phrases),
+        "max_results": 5 * len(phrases),
+    })
+    feed = ElementTree.fromstring(_get(f"https://export.arxiv.org/api/query?{query}"))
+    by_title: dict[str, list[tuple[set[str], str]]] = {}
+    for entry in feed.findall("atom:entry", ATOM):
+        title = _title_key(entry.findtext("atom:title", default="", namespaces=ATOM))
+        names = [author.text or "" for author in entry.findall("atom:author/atom:name", ATOM)]
+        abstract = " ".join(entry.findtext("atom:summary", default="", namespaces=ATOM).split())
+        if title and abstract:
+            by_title.setdefault(title, []).append((_author_surnames(names), abstract))
+
+    for paper in papers:
+        authors = _author_surnames(paper.authors)
+        matches = {
+            abstract
+            for names, abstract in by_title.get(_title_key(paper.title), [])
+            if not authors or authors & names
+        }
+        if len(matches) == 1:
+            paper.abstract = matches.pop()
+
+
+def load_conference_abstracts(papers: list[Paper]) -> None:
+    """Fill missing abstracts for the selected papers using public metadata."""
+    details = [paper for paper in papers if not paper.abstract and paper.source in DETAIL_ABSTRACT_XPATH]
+    if details:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for paper, abstract in zip(details, pool.map(_fetch_detail_abstract, details)):
+                paper.abstract = abstract
+
+    www_papers = [paper for paper in papers if not paper.abstract and paper.source == "WWW"]
+    if www_papers:
+        try:
+            abstracts = _fetch_www_abstracts()
+            for paper in www_papers:
+                paper.abstract = abstracts.get(_title_key(paper.title), "")
+        except SOURCE_ERRORS as error:
+            logger.warning(f"Unable to load the WWW proceedings abstracts: {error}")
+
+    missing = [paper for paper in papers if not paper.abstract]
+    if missing:
+        try:
+            _fill_from_arxiv(missing)
+        except SOURCE_ERRORS as error:
+            logger.warning(f"Unable to look up conference abstracts on arXiv: {error}")
+
+
 def _aaai_papers() -> list[Paper]:
     papers = []
     page_size = 1000
@@ -289,7 +375,7 @@ def fetch_conference_papers() -> list[Paper]:
         for venue, future in pending.items():
             try:
                 catalogue = future.result()
-            except (OSError, ValueError, KeyError, ElementTree.ParseError, etree.LxmlError, *INCOMPLETE_RESPONSE) as error:
+            except SOURCE_ERRORS as error:
                 logger.warning(f"Unable to load {venue} 2026 conference papers: {error}")
                 continue
             logger.info(f"Loaded {len(catalogue)} {venue} 2026 conference papers")

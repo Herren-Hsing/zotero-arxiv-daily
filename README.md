@@ -183,6 +183,8 @@ Candidate titles rotate by calendar day in China on a 64-day cycle. The ranking 
 
 Existing `CUSTOM_CONFIG` values inherit this feature. To turn it off, set `executor.ccf_a_2026: false`.
 
+For selected conference papers, the email includes a Simplified Chinese translation of the available abstract using the existing `llm` configuration. Public conference metadata and matching arXiv records supply missing abstracts. If translation fails, the email includes the available source abstract. If an abstract cannot be verified, the email includes the title and paper link.
+
 ### Local Running
 Supported by [uv](https://github.com/astral-sh/uv), this workflow can easily run on your local device if uv is installed:
 ```bash

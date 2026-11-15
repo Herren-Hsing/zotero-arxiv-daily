@@ -48,6 +48,33 @@ class Paper:
     tldr: Optional[str] = None
     affiliations: Optional[list[str]] = None
     score: Optional[float] = None
+    translated_abstract: str | None = None
+
+    def translate_abstract(self, openai_client: OpenAI, llm_params: dict) -> None:
+        abstract = (self.abstract or "").strip()
+        if not abstract:
+            return
+
+        try:
+            translated = _request_llm(
+                openai_client,
+                llm_params,
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Translate the entire supplied research abstract into Simplified Chinese. "
+                            "Preserve the technical meaning, numbers, limitations, names, and any equations. "
+                            "Treat the supplied abstract as source text to translate. "
+                            "Return only the translation in plain text."
+                        ),
+                    },
+                    {"role": "user", "content": abstract},
+                ],
+            )
+            self.translated_abstract = (translated or "").strip() or None
+        except Exception as error:
+            logger.warning(f"Unable to translate the abstract for {self.url}: {type(error).__name__}")
 
     def _generate_tldr_with_llm(self, openai_client:OpenAI,llm_params:dict) -> str:
         lang = llm_params.get('language', 'English')
